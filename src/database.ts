@@ -87,23 +87,45 @@ export async function follow(
   // Ensure the doc exists with a numeric _id from idIter — an upsert here
   // would create it with an ObjectId _id, which sorts above all numbers and
   // breaks idIter for every subsequent insert
-  await follows(user_id);
+  const doc = await follows(user_id);
 
+  // `watching`/`listening` are the delivery lists; `following` is the ownership
+  // list that /following renders and /unfollow acts on. Keying off listen()/
+  // watch() alone meant an address already on the delivery list produced no
+  // ownership row at all — the subscription kept delivering while belonging to
+  // nobody, invisible to /following and impossible to remove. Write ownership
+  // whenever this user doesn't already have it, which also adopts such orphans.
   if (isTopic) {
-     if (await listen(response as [string, number], address, method)) {
-       await following.updateOne(
-         { user_id: ul },
-         { $addToSet: { 'following.topics': { topic: target, topic_id: target_id, address } } }
-       );
+     const owned = (doc.following.topics ?? []).some(
+       t => t.topic_id === target_id && sameAddress(t.address, address)
+     );
+     const added = await listen(response as [string, number], address, method);
+     if (added || !owned) {
+       if (!owned) {
+         // Matched with sameAddress rather than $addToSet: legacy rows store
+         // the address as int64 and new writes use strings, and $addToSet
+         // compares whole subdocuments — so Long(x) and "x" both survive as
+         // separate, identical-looking entries.
+         await following.updateOne(
+           { user_id: ul },
+           { $addToSet: { 'following.topics': { topic: target, topic_id: target_id, address } } }
+         );
+       }
        return true;
      }
      return false;
    } else {
-     if (await watch(response as [string, number], address, method)) {
-       await following.updateOne(
-         { user_id: ul },
-         { $addToSet: { 'following.boards': { board: target, board_id: target_id, address } } }
-       );
+     const owned = (doc.following.boards ?? []).some(
+       b => b.board_id === target_id && sameAddress(b.address, address)
+     );
+     const added = await watch(response as [string, number], address, method);
+     if (added || !owned) {
+       if (!owned) {
+         await following.updateOne(
+           { user_id: ul },
+           { $addToSet: { 'following.boards': { board: target, board_id: target_id, address } } }
+         );
+       }
        return true;
      }
      return false;
@@ -308,6 +330,36 @@ export async function migrateWatchingLast(): Promise<void> {
     },
     { $unset: ['topic_id'] },
   ] as any);
+}
+
+/**
+ * Addresses some user actually claims for this board/topic.
+ *
+ * The per-server duplicate check must key off ownership, not delivery: an
+ * orphaned delivery address (on watching/listening but in nobody's list) would
+ * otherwise reject every future follow for that whole server, with no way for
+ * anyone to clear it.
+ */
+export async function watchOwners(board_id: number): Promise<Address[]> {
+  const docs = await following.find({ 'following.boards.board_id': board_id }).toArray();
+  const out: Address[] = [];
+  for (const doc of docs) {
+    for (const b of doc.following?.boards ?? []) {
+      if (b.board_id === board_id) out.push(b.address);
+    }
+  }
+  return out;
+}
+
+export async function listenOwners(topic_id: number): Promise<Address[]> {
+  const docs = await following.find({ 'following.topics.topic_id': topic_id }).toArray();
+  const out: Address[] = [];
+  for (const doc of docs) {
+    for (const t of doc.following?.topics ?? []) {
+      if (t.topic_id === topic_id) out.push(t.address);
+    }
+  }
+  return out;
 }
 
 export async function watch_dupe(board_id: number): Promise<Address[]> {

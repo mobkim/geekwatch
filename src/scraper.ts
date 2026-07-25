@@ -63,8 +63,12 @@ function parseTopicInfo($: cheerio.CheerioAPI): {
   op_score: string;
   image: string;
 } | null {
-  const keyinfo = $('div.keyinfo');
-  const topic = keyinfo.find('a').text().trim();
+  // One div.keyinfo per post on the page. The Python used soup.find(), which
+  // takes the first match only — cheerio's .text() concatenates every match,
+  // so an unscoped selector returned every post's subject glued together and
+  // every timestamp in a row. Scope to the opening post.
+  const keyinfo = $('div.keyinfo').first();
+  const topic = keyinfo.find('a').first().text().trim();
 
   const smalltext = keyinfo.find('div.smalltext').text().trim();
   const date = smalltext.slice(7, smalltext.length - 2);
@@ -73,7 +77,10 @@ function parseTopicInfo($: cheerio.CheerioAPI): {
   if (posters.length === 0) return null;
 
   const op = posters[0];
-  const opName = $(op).find('a').text().trim();
+  // Guests have no profile link — their name sits in the <h4> with no <a> at
+  // all, so keying off the anchor returned an empty author. h4 holds the name
+  // for registered users too.
+  const opName = $(op).find('h4').text().trim() || $(op).find('a').text().trim();
   const opHref = $(op).find('a').attr('href') || '';
   const uidMatch = opHref.match(/u=(\d+)/);
   const opId = uidMatch ? parseInt(uidMatch[1], 10) : 0;

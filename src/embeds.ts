@@ -48,16 +48,16 @@ export function followEmbed(
   now: boolean
 ): EmbedBuilder {
   const embed = new EmbedBuilder()
-    .setTitle(topic)
+    .setTitle(topic.slice(0, 256) || 'Topic')
     .setURL(`https://geekhack.org/index.php?topic=${topicId}.0`)
     .setColor(now ? BLURPLE : RED);
 
   if (now) {
     embed.setDescription(`Responses from **${opName}** will be sent to this channel`);
     embed.setAuthor({
-      name: `Now following: ${opName} (${opScore})`,
+      name: `Now following: ${opName} (${opScore})`.slice(0, 256),
       url: `https://geekhack.org/index.php?action=profile;u=${opId}`,
-      iconURL: avatar,
+      iconURL: avatar || undefined,
     });
     if (opIcon) embed.setThumbnail(opIcon);
     if (image) embed.setImage(image);
@@ -262,15 +262,24 @@ export function topicPostEmbed(
   opScore: string,
   opIcon: string,
   image: string,
-  timestamp: string
+  timestamp: string,
+  topic_href?: string
 ): EmbedBuilder {
+  // discord.py quietly ignored an empty icon_url and an over-long field;
+  // discord.js rejects the whole embed, so clamp to Discord's limits here
+  // rather than lose the post. Long posts are truncated, not dropped.
+  const description = response.length > 4096 ? response.slice(0, 4093) + '...' : response;
   const embed = new EmbedBuilder()
-    .setTitle(kind)
+    .setTitle(kind.slice(0, 256) || 'New post')
     .setURL(msg_href)
-    .setDescription(response)
+    .setDescription(description || null)
     .setColor(GREYPLE)
-    .setAuthor({ name: `${topic}\n${opName} (${opScore})`, iconURL: opIcon })
-    .setFooter({ text: 'geekhack | ' + timestamp, iconURL: FOOTER_ICON });
+    .setAuthor({
+      name: `${topic}\n${opName} (${opScore})`.slice(0, 256),
+      iconURL: opIcon || undefined,
+      url: topic_href || undefined,
+    })
+    .setFooter({ text: ('geekhack | ' + timestamp).slice(0, 2048), iconURL: FOOTER_ICON });
 
   if (image) embed.setImage(image);
   return embed;
@@ -305,12 +314,19 @@ export function boardNewTopicEmbed(
   image: string,
   color: ColorResolvable
 ): EmbedBuilder {
+  // Discord rejects the whole embed on an over-long title or an empty-string
+  // iconURL/url, and OPs with no membergroup image are common — so normalise
+  // rather than let a single missing field drop the notification.
   const embed = new EmbedBuilder()
-    .setTitle(title)
+    .setTitle(title.slice(0, 256) || 'New topic')
     .setURL(url)
     .setColor(color)
-    .setAuthor({ name: `${opName} (${posts})`, iconURL: opFlair, url: opHref })
-    .setFooter({ text: 'geekhack | ' + date, iconURL: FOOTER_ICON });
+    .setAuthor({
+      name: `${opName || 'unknown'} (${posts})`.slice(0, 256),
+      iconURL: opFlair || undefined,
+      url: opHref || undefined,
+    })
+    .setFooter({ text: ('geekhack | ' + date).slice(0, 2048), iconURL: FOOTER_ICON });
 
   if (image) embed.setImage(image);
   return embed;

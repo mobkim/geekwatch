@@ -9,7 +9,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*'],
-      exclude: ['src/index.ts', 'src/watcher.ts', 'src/listener.ts'],
+      exclude: ['src/index.ts'],
     },
     fileParallelism: false, // Prevents concurrent test files
   },

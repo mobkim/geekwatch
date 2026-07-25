@@ -14,6 +14,8 @@ import {
   watches,
   watched,
   watch_dupe,
+  watchOwners,
+  listenOwners,
   serve,
   unserve,
   serves,
@@ -276,6 +278,75 @@ describe('database', () => {
     it('returns ["0"] when no channels are listening', async () => {
       const result = await listen_dupe(12345);
       expect(result).toEqual(['0']);
+    });
+  });
+
+  describe('orphaned delivery addresses', () => {
+    it('adopts a board already on the delivery list but owned by nobody', async () => {
+      // Reproduces board 132 / channel 769799450587561994: the address delivers
+      // notifications but appears in no user's list, so it could never be seen
+      // or removed, and blocked every future follow in that server.
+      await watch(['Interest Checks', 132], 'chanOrphan', 'channel');
+      expect(await watchOwners(132)).toHaveLength(0);
+
+      const result = await follow('user1', 'Interest Checks', 132, 'chanOrphan', ['Interest Checks', 132]);
+
+      expect(result).toBe(true);
+      const doc = await follows('user1');
+      expect(doc.following.boards).toContainEqual(
+        expect.objectContaining({ board_id: 132, address: 'chanOrphan' })
+      );
+      expect((await watchOwners(132)).map(String)).toContain('chanOrphan');
+    });
+
+    it('adopts an orphaned topic the same way', async () => {
+      await listen(['A Topic', 12345], 'chanOrphan', 'channel');
+      expect(await listenOwners(12345)).toHaveLength(0);
+
+      const result = await follow('user1', 'A Topic', 12345, 'chanOrphan', ['A Topic', 12345]);
+
+      expect(result).toBe(true);
+      expect((await listenOwners(12345)).map(String)).toContain('chanOrphan');
+    });
+
+    it('still reports a duplicate when the same user already owns the address', async () => {
+      await follow('user1', 'Interest Checks', 132, 'chan1', ['Interest Checks', 132]);
+
+      expect(await follow('user1', 'Interest Checks', 132, 'chan1', ['Interest Checks', 132])).toBe(false);
+
+      const doc = await follows('user1');
+      expect(doc.following.boards.filter(b => b.board_id === 132)).toHaveLength(1);
+    });
+
+    it('does not duplicate a legacy int64 address row', async () => {
+      // Legacy Python rows store the address as int64; $addToSet compares whole
+      // subdocuments, so Long(x) and "x" would both survive as separate,
+      // identical-looking rows. Ownership is matched with sameAddress instead.
+      const { following } = getCollections();
+      await follow('4242', 'Interest Checks', 132, '999', ['Interest Checks', 132]);
+
+      // Rewrite the stored address to the legacy int64 form.
+      const res = await following.updateOne(
+        { user_id: Long.fromString('4242'), 'following.boards.board_id': 132 },
+        { $set: { 'following.boards.$.address': Long.fromString('999') } }
+      );
+      expect(res.modifiedCount).toBe(1);
+
+      await follow('4242', 'Interest Checks', 132, '999', ['Interest Checks', 132]);
+
+      const doc = await follows('4242');
+      expect(doc.following.boards.filter(b => b.board_id === 132)).toHaveLength(1);
+    });
+
+    it('lists owners separately from delivery addresses', async () => {
+      await follow('user1', 'Interest Checks', 132, 'chan1', ['Interest Checks', 132]);
+      await watch(['Interest Checks', 132], 'chanOrphan', 'channel');
+
+      const owners = (await watchOwners(132)).map(String);
+      const delivery = (await watch_dupe(132)).map(String);
+
+      expect(owners).toEqual(['chan1']);
+      expect(delivery).toEqual(expect.arrayContaining(['chan1', 'chanOrphan']));
     });
   });
 

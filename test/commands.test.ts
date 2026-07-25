@@ -41,6 +41,9 @@ function createMockInteraction(
     guildChannels?: string[];
     stringOptions?: Record<string, string>;
     guildUncached?: boolean;
+    dmChannelId?: string;
+    cachedChannels?: Record<string, { guildId: string }>;
+    fetchableChannels?: Record<string, { guildId: string }>;
   } = {}
 ) {
   const {
@@ -53,6 +56,9 @@ function createMockInteraction(
     guildChannels = [],
     stringOptions = {},
     guildUncached = false,
+    dmChannelId,
+    cachedChannels = {},
+    fetchableChannels = {},
   } = options;
 
   return {
@@ -60,6 +66,11 @@ function createMockInteraction(
     user: {
       id: userId,
       displayAvatarURL: () => avatarURL,
+      dmChannel: dmChannelId ? { id: dmChannelId } : null,
+      createDM: vi.fn(async () => {
+        if (!dmChannelId) throw new Error('cannot DM');
+        return { id: dmChannelId };
+      }),
     },
     channelId,
     guildId: isDM ? null : guildId,
@@ -85,8 +96,12 @@ function createMockInteraction(
     client: {
       channels: {
         cache: {
-          get: vi.fn().mockReturnValue(undefined),
+          get: vi.fn((id: string) => cachedChannels[id]),
         },
+        fetch: vi.fn(async (id: string) => {
+          if (!fetchableChannels[id]) throw new Error('Unknown Channel');
+          return fetchableChannels[id];
+        }),
       },
     },
     options: {
@@ -349,6 +364,49 @@ describe('slash commands', () => {
       expect(embed.type).toBe('followList');
       expect(embed.topics).toContain('My Topic');
       expect(embed.boards).toContain('My Board');
+    });
+  });
+
+  describe('following (index links)', () => {
+    it('links a DM follow to the caller\'s DM channel', async () => {
+      await follow('user1', 'My Topic', 12345, 'user1', ['My Topic', 12345]);
+
+      const interaction = createMockInteraction('following', {
+        isDM: true,
+        dmChannelId: 'dmchan9',
+      });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+
+      // The Python gated on get_channel(cid).guild.id, which is None for a DM,
+      // so DM rows always rendered as a bare `[ 1 ]` with no link.
+      expect(getLastRepliedEmbed(interaction).topics).toContain(
+        '[[ 1 ]](https://discord.com/channels/@me/dmchan9)'
+      );
+    });
+
+    it('falls back to a fetch when the channel is not cached', async () => {
+      await follow('user1', 'My Topic', 12345, 'chan7', ['My Topic', 12345]);
+
+      const interaction = createMockInteraction('following', {
+        isDM: true,
+        fetchableChannels: { chan7: { guildId: 'guild9' } },
+      });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+
+      // A cache miss used to be indistinguishable from "this is a DM", so the
+      // index silently lost its hyperlink while its neighbours kept theirs.
+      expect(getLastRepliedEmbed(interaction).topics).toContain(
+        '[[ 1 ]](https://discord.com/channels/guild9/chan7)'
+      );
+    });
+
+    it('leaves the index unlinked when the channel is truly gone', async () => {
+      await follow('user1', 'My Topic', 12345, 'chan404', ['My Topic', 12345]);
+
+      const interaction = createMockInteraction('following', { isDM: true });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+
+      expect(getLastRepliedEmbed(interaction).topics).toContain('[ 1 ] [My Topic]');
     });
   });
 

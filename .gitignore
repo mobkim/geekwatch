@@ -3,3 +3,5 @@ dist
 .env
 .mongodb-binaries
 deploy.json
+scripts
+coverage

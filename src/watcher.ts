@@ -20,7 +20,7 @@ async function fetchPage(url: string): Promise<cheerio.CheerioAPI | null> {
   }
 }
 
-async function processBoard(client: Client, board: Awaited<ReturnType<typeof watches>>[number]): Promise<void> {
+export async function processBoard(client: Client, board: Awaited<ReturnType<typeof watches>>[number]): Promise<void> {
   const boardId = board.board_id;
   const latest = board.last;
 
@@ -44,25 +44,42 @@ async function processBoard(client: Client, board: Awaited<ReturnType<typeof wat
     return;
   }
 
+  // Advance `last` only past topics we actually finished with. Bumping it to
+  // the front page max regardless meant a single transient fetch failure — or
+  // a throw further down — silently dropped that topic forever.
+  let cursor = latest;
+
   for (const tid of front) {
     if (tid <= latest) continue;
 
     const url = `${GEEKHACK_BASE}/index.php?topic=${tid}.0`;
     const page$ = await fetchPage(url);
-    if (!page$) continue;
+    // Transient — stop here and retry this topic (and everything after it) on
+    // the next tick rather than skipping past it.
+    if (!page$) break;
 
     const opDiv = page$('div.poster').first();
-    if (opDiv.length === 0) continue;
+    if (opDiv.length === 0) {
+      cursor = tid;
+      continue;
+    }
 
-    const opName = opDiv.find('a').text().trim();
+    // Guests have no profile link; their name is in the <h4>. Registered
+    // users have it there too.
+    const opName = opDiv.find('h4').text().trim() || opDiv.find('a').text().trim();
     const opHref = opDiv.find('a').attr('href') || '';
     const uMatch = opHref.match(/u=(\d+)/);
     const profileUrl = uMatch ? `${GEEKHACK_BASE}/index.php?action=profile;u=${uMatch[1]}` : '';
 
-    const smalltext = page$('div.keyinfo div.smalltext').text().trim();
+    // A topic page carries one div.keyinfo per post, so an unscoped selector
+    // concatenated all of them — the title came back as every post's subject
+    // glued together (well over Discord's 256 char cap) and the date as every
+    // timestamp in a row. Scope to the opening post, same as the listener.
+    const keyinfo = page$('div.keyinfo').first();
+    const smalltext = keyinfo.find('div.smalltext').text().trim();
     const date = smalltext.slice(7, smalltext.length - 2);
     const posts = opDiv.find('li.postcount').text().replace('Posts: ', '');
-    const title = page$('div.keyinfo a').text().trim();
+    const title = keyinfo.find('a').first().text().trim();
 
     try {
       const opFlair = opDiv.find('li.membergroup img').attr('src') || '';
@@ -115,14 +132,17 @@ async function processBoard(client: Client, board: Awaited<ReturnType<typeof wat
           }
         }
       }
-    } catch {
-      continue;
+      cursor = tid;
+    } catch (err) {
+      // The page fetched and parsed but we still couldn't announce it. Log it
+      // and move on — a bare `continue` here hid a board-wide outage.
+      log(`Board ${boardId}: failed to announce topic ${tid}: ${err}`);
+      cursor = tid;
     }
   }
 
-  // Update last
-  if (front.length > 0) {
-    await watched(boardId, front[front.length - 1]);
+  if (cursor > latest) {
+    await watched(boardId, cursor);
   }
 }
 

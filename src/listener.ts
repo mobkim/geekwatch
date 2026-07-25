@@ -89,7 +89,8 @@ function buildPostEmbed(
   }
 
   const opScore = posterDiv.find('li.postcount').text().replace('Posts: ', '');
-  const opName = posterDiv.find('a').text().trim();
+  // h4 carries the name for guests (no profile link) and members alike.
+  const opName = posterDiv.find('h4').text().trim() || posterDiv.find('a').text().trim();
 
   // The date line and the permalink live in div.keyinfo, not div.poster —
   // scoping these to posterDiv matched nothing, so every embed carried an
@@ -122,7 +123,13 @@ function buildPostEmbed(
     msgHref = `${GEEKHACK_BASE}/index.php?topic=${topic_id}.${offset}`;
   }
 
-  return topicPostEmbed(kind, msgHref, response, topic_title, opName, opScore, opIcon, image, timestamp);
+  // The Python set the author url to topic_href, but read it from a closure
+  // variable that the scan loop had already advanced to the last recent topic
+  // — so every embed linked to whichever thread happened to be scanned last.
+  // topic_id is passed in per topic here, so the link is actually correct.
+  const topicHref = `${GEEKHACK_BASE}/index.php?topic=${topic_id}`;
+
+  return topicPostEmbed(kind, msgHref, response, topic_title, opName, opScore, opIcon, image, timestamp, topicHref);
 }
 
 /**

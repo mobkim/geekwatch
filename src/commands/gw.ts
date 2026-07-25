@@ -19,8 +19,8 @@ import {
   follow,
   follows,
   unfollow,
-  listen_dupe,
-  watch_dupe,
+  listenOwners,
+  watchOwners,
   restrict,
 } from '../database.js';
 import { SlashCommandBuilder } from 'discord.js';
@@ -75,44 +75,83 @@ function guildHasSubscription(
   return ids.some(id => guildChannelIds.includes(id));
 }
 
-function buildFollowLists(
+async function buildFollowLists(
   client: import('discord.js').Client | undefined,
   topics: TopicEntry[],
-  boards: BoardEntry[]
-): { topicsStr: string; boardsStr: string } {
-  const getLocationUrl = (address: Address) => {
+  boards: BoardEntry[],
+  user?: import('discord.js').User
+): Promise<{ topicsStr: string; boardsStr: string }> {
+  // A DM follow is keyed by the follower's user id, and /following only ever
+  // lists the caller's own doc — so an address equal to the caller means "my
+  // DMs", and the DM channel id gives a real @me link. The Python gated on
+  // client.get_channel(cid).guild.id, which is None for a DM, so these rows
+  // always rendered as a bare unlinked index.
+  let dmUrl: string | null = null;
+  const getDmUrl = async (): Promise<string> => {
+    if (dmUrl !== null) return dmUrl;
+    dmUrl = '';
+    try {
+      const dm = user?.dmChannel ?? (await user?.createDM());
+      if (dm) dmUrl = `https://discord.com/channels/@me/${dm.id}`;
+    } catch {
+      // Can't open a DM (blocked, no mutual guild) — fall back to no link.
+    }
+    return dmUrl;
+  };
+
+  // client.channels.cache only holds what arrived in GUILD_CREATE, so a
+  // channel the bot can't currently view — or one evicted from the cache —
+  // silently lost its index hyperlink while its neighbours kept theirs. Fall
+  // back to a fetch so a cache miss isn't mistaken for "this is a DM".
+  const resolved = new Map<string, string>();
+  const getLocationUrl = async (address: Address): Promise<string> => {
     const chId = String(address);
     if (!chId || chId === '0') return '';
-    const channel = client?.channels?.cache?.get(chId);
-    if (channel && 'guildId' in channel && channel.guildId) {
-      return `https://discord.com/channels/${channel.guildId}/${chId}`;
+    if (user && chId === user.id) return getDmUrl();
+    if (resolved.has(chId)) return resolved.get(chId)!;
+
+    let url = '';
+    let channel = client?.channels?.cache?.get(chId) ?? null;
+    if (!channel) {
+      try {
+        channel = (await client?.channels?.fetch(chId)) ?? null;
+      } catch {
+        // Gone or unreachable — no location to link to.
+        channel = null;
+      }
     }
-    return '';
+    if (channel && 'guildId' in channel && channel.guildId) {
+      url = `https://discord.com/channels/${channel.guildId}/${chId}`;
+    }
+    resolved.set(chId, url);
+    return url;
   };
 
   let topicsStr = 'None';
   let boardsStr = 'None';
 
   if (topics.length > 0) {
-    topicsStr = topics.map((t, i) => {
+    const lines = await Promise.all(topics.map(async (t, i) => {
       const idx = i + 1;
-      const url = getLocationUrl(t.address);
+      const url = await getLocationUrl(t.address);
       const ghUrl = `https://geekhack.org/index.php?topic=${t.topic_id}.0`;
       return url
         ? `[[ ${idx} ]](${url}) [${t.topic}](${ghUrl})`
         : `[ ${idx} ] [${t.topic}](${ghUrl})`;
-    }).join('\n');
+    }));
+    topicsStr = lines.join('\n');
   }
   if (boards.length > 0) {
     const startIdx = topics.length + 1;
-    boardsStr = boards.map((b, i) => {
+    const lines = await Promise.all(boards.map(async (b, i) => {
       const idx = startIdx + i;
-      const url = getLocationUrl(b.address);
+      const url = await getLocationUrl(b.address);
       const ghUrl = `https://geekhack.org/index.php?board=${b.board_id}.0`;
       return url
         ? `[[ ${idx} ]](${url}) [${b.board}](${ghUrl})`
         : `[ ${idx} ] [${b.board}](${ghUrl})`;
-    }).join('\n');
+    }));
+    boardsStr = lines.join('\n');
   }
 
   return { topicsStr, boardsStr };
@@ -225,7 +264,7 @@ async function handleFollowOrWatchSlash(
     const [topic, topic_id, date, op_name, op_id, op_flair, op_icon, op_score, image] = response;
 
     if (interaction.guild) {
-      if (guildHasSubscription(interaction.guild, await listen_dupe(topic_id))) {
+      if (guildHasSubscription(interaction.guild, await listenOwners(topic_id))) {
         await interaction.reply({ embeds: [errorEmbed('Already followed within this server', 'This topic is already being followed within this server')], ephemeral: true });
         return;
       }
@@ -247,7 +286,7 @@ async function handleFollowOrWatchSlash(
     const [board, board_id] = response;
 
     if (interaction.guild) {
-      if (guildHasSubscription(interaction.guild, await watch_dupe(board_id))) {
+      if (guildHasSubscription(interaction.guild, await watchOwners(board_id))) {
         await interaction.reply({ embeds: [errorEmbed('Already being watched within this server', 'This board is already being watched within this server')], ephemeral: true });
         return;
       }
@@ -287,7 +326,7 @@ async function handleUnfollowOrUnwatchSlash(
 
   if (index === 'all') {
     const doc = await follows(user_id);
-    const { topicsStr, boardsStr } = buildFollowLists(interaction.client, doc.following.topics, doc.following.boards);
+    const { topicsStr, boardsStr } = await buildFollowLists(interaction.client, doc.following.topics, doc.following.boards, interaction.user);
     await interaction.reply({ embeds: [followListEmbed(topicsStr, boardsStr, avatar)], ephemeral: true });
   } else {
     const r = response as [string, number];
@@ -301,7 +340,7 @@ async function handleFollowingSlash(
   interaction: ChatInputCommandInteraction
 ): Promise<void> {
   const doc = await follows(user_id);
-  const { topicsStr, boardsStr } = buildFollowLists(interaction.client, doc.following.topics, doc.following.boards);
+  const { topicsStr, boardsStr } = await buildFollowLists(interaction.client, doc.following.topics, doc.following.boards, interaction.user);
   await interaction.reply({ embeds: [followListEmbed(topicsStr, boardsStr, avatar)], ephemeral: true });
 }
 
