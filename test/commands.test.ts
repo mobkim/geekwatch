@@ -368,7 +368,7 @@ describe('slash commands', () => {
   });
 
   describe('following (index links)', () => {
-    it('links a DM follow to the caller\'s DM channel', async () => {
+    it('leaves a DM follow unlinked when /following is invoked from that same DM', async () => {
       await follow('user1', 'My Topic', 12345, 'user1', ['My Topic', 12345]);
 
       const interaction = createMockInteraction('following', {
@@ -377,11 +377,39 @@ describe('slash commands', () => {
       });
       await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      // The Python gated on get_channel(cid).guild.id, which is None for a DM,
-      // so DM rows always rendered as a bare `[ 1 ]` with no link.
+      // A link to "here" tells the reader nothing — the entry's resolved
+      // location and the invoking DM resolve to the same @me URL, so the
+      // index stays a plain, unlinked bracket instead of a no-op hyperlink.
+      expect(getLastRepliedEmbed(interaction).topics).toContain('[ 1 ] [My Topic]');
+      expect(getLastRepliedEmbed(interaction).topics).not.toContain('discord.com/channels/@me');
+    });
+
+    it('keeps a DM follow\'s link when /following is invoked from a guild channel', async () => {
+      await follow('user1', 'My Topic', 12345, 'user1', ['My Topic', 12345]);
+
+      const interaction = createMockInteraction('following', {
+        dmChannelId: 'dmchan9',
+      });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+
+      // Invoked somewhere other than the entry's own DM — the link is real
+      // information (where the reply is actually shown, not where it's kept)
+      // so it must stay.
       expect(getLastRepliedEmbed(interaction).topics).toContain(
         '[[ 1 ]](https://discord.com/channels/@me/dmchan9)'
       );
+    });
+
+    it('does not hyperlink the index when the entry is the exact channel /following was invoked in', async () => {
+      await follow('user1', 'My Topic', 12345, 'channel1', ['My Topic', 12345]);
+
+      const interaction = createMockInteraction('following', {
+        cachedChannels: { channel1: { guildId: 'guild1' } },
+      });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+
+      expect(getLastRepliedEmbed(interaction).topics).toContain('[ 1 ] [My Topic]');
+      expect(getLastRepliedEmbed(interaction).topics).not.toContain('discord.com/channels/guild1/channel1');
     });
 
     it('falls back to a fetch when the channel is not cached', async () => {

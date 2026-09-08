@@ -79,12 +79,15 @@ function guildHasSubscription(
 // stay visible and clickable via its geekhack link — nothing is ever dropped
 // or cut off mid-line. Whether an index also gets a jump-to-location link is
 // decided by redundancy, not budget: if the entry's tracked location *is*
-// where /following was just run, a link to "here" tells the reader nothing,
-// so it's left as a plain index; every other entry's location link is always
-// included, since that's real information the budget doesn't get to veto.
-// Only if that still doesn't fit under 1024 (very large titles at the 10-item
-// cap) does it fall back to shrinking every title by an equal shared amount —
-// never a raw character slice (that used to cut a line off mid-URL).
+// where /following was just run — compared as the resolved location URL, not
+// the raw stored address, since a DM entry's address is the follower's user
+// id while "here" in a DM is the DM channel — a link to it tells the reader
+// nothing, so it's left as a plain index; every other entry's location link
+// is always included, since that's real information the budget doesn't get
+// to veto. Only if that still doesn't fit under 1024 (very large titles at
+// the 10-item cap) does it fall back to shrinking every title by an equal
+// shared amount — never a raw character slice (that used to cut a line off
+// mid-URL).
 const FIELD_VALUE_LIMIT = 1024;
 const MAX_TITLE_LEN = 100;
 
@@ -98,13 +101,12 @@ function buildLine(idx: number, title: string, ghUrl: string, locationUrl: strin
 async function buildListField(
   entries: { idx: number; title: string; ghUrl: string; address: Address }[],
   getLocationUrl: (address: Address) => Promise<string>,
-  here?: string
+  hereUrl?: string
 ): Promise<string> {
   if (entries.length === 0) return 'None';
 
-  const locationUrls = await Promise.all(entries.map(e =>
-    here && String(e.address) === here ? Promise.resolve('') : getLocationUrl(e.address)
-  ));
+  const resolvedUrls = await Promise.all(entries.map(e => getLocationUrl(e.address)));
+  const locationUrls = resolvedUrls.map(url => (hereUrl && url === hereUrl ? '' : url));
   const render = (titleLen: number): string[] =>
     entries.map((e, i) => buildLine(e.idx, e.title, e.ghUrl, locationUrls[i], titleLen));
   const fits = (lines: string[]) => lines.join('\n').length <= FIELD_VALUE_LIMIT;
@@ -133,7 +135,7 @@ async function buildFollowLists(
   topics: TopicEntry[],
   boards: BoardEntry[],
   user?: import('discord.js').User,
-  here?: string
+  here?: { guildId: string | null; channelId: string }
 ): Promise<{ topicsStr: string; boardsStr: string }> {
   // A DM follow is keyed by the follower's user id, and /following only ever
   // lists the caller's own doc — so an address equal to the caller means "my
@@ -195,8 +197,14 @@ async function buildFollowLists(
     address: b.address,
   }));
 
-  const topicsStr = await buildListField(topicEntries, getLocationUrl, here);
-  const boardsStr = await buildListField(boardEntries, getLocationUrl, here);
+  const hereUrl = here
+    ? (here.guildId
+        ? `https://discord.com/channels/${here.guildId}/${here.channelId}`
+        : await getDmUrl())
+    : undefined;
+
+  const topicsStr = await buildListField(topicEntries, getLocationUrl, hereUrl);
+  const boardsStr = await buildListField(boardEntries, getLocationUrl, hereUrl);
 
   return { topicsStr, boardsStr };
 }
@@ -370,7 +378,7 @@ async function handleUnfollowOrUnwatchSlash(
 
   if (index === 'all') {
     const doc = await follows(user_id);
-    const here = interaction.guildId ? interaction.channelId : interaction.user.id;
+    const here = { guildId: interaction.guildId, channelId: interaction.channelId };
     const { topicsStr, boardsStr } = await buildFollowLists(interaction.client, doc.following.topics, doc.following.boards, interaction.user, here);
     await interaction.reply({ embeds: [followListEmbed(topicsStr, boardsStr, avatar)], ephemeral: true });
   } else {
@@ -385,7 +393,7 @@ async function handleFollowingSlash(
   interaction: ChatInputCommandInteraction
 ): Promise<void> {
   const doc = await follows(user_id);
-  const here = interaction.guildId ? interaction.channelId : interaction.user.id;
+  const here = { guildId: interaction.guildId, channelId: interaction.channelId };
   const { topicsStr, boardsStr } = await buildFollowLists(interaction.client, doc.following.topics, doc.following.boards, interaction.user, here);
   await interaction.reply({ embeds: [followListEmbed(topicsStr, boardsStr, avatar)], ephemeral: true });
 }
