@@ -75,11 +75,65 @@ function guildHasSubscription(
   return ids.some(id => guildChannelIds.includes(id));
 }
 
+// Discord embed field values cap out at 1024 raw characters. Every entry must
+// stay visible and clickable via its geekhack link — nothing is ever dropped
+// or cut off mid-line. Whether an index also gets a jump-to-location link is
+// decided by redundancy, not budget: if the entry's tracked location *is*
+// where /following was just run, a link to "here" tells the reader nothing,
+// so it's left as a plain index; every other entry's location link is always
+// included, since that's real information the budget doesn't get to veto.
+// Only if that still doesn't fit under 1024 (very large titles at the 10-item
+// cap) does it fall back to shrinking every title by an equal shared amount —
+// never a raw character slice (that used to cut a line off mid-URL).
+const FIELD_VALUE_LIMIT = 1024;
+const MAX_TITLE_LEN = 100;
+
+function buildLine(idx: number, title: string, ghUrl: string, locationUrl: string, titleLen: number): string {
+  const shown = title.length > titleLen ? title.slice(0, Math.max(titleLen - 1, 1)) + '…' : title;
+  return locationUrl
+    ? `[[ ${idx} ]](${locationUrl}) [${shown}](${ghUrl})`
+    : `[ ${idx} ] [${shown}](${ghUrl})`;
+}
+
+async function buildListField(
+  entries: { idx: number; title: string; ghUrl: string; address: Address }[],
+  getLocationUrl: (address: Address) => Promise<string>,
+  here?: string
+): Promise<string> {
+  if (entries.length === 0) return 'None';
+
+  const locationUrls = await Promise.all(entries.map(e =>
+    here && String(e.address) === here ? Promise.resolve('') : getLocationUrl(e.address)
+  ));
+  const render = (titleLen: number): string[] =>
+    entries.map((e, i) => buildLine(e.idx, e.title, e.ghUrl, locationUrls[i], titleLen));
+  const fits = (lines: string[]) => lines.join('\n').length <= FIELD_VALUE_LIMIT;
+
+  let lines = render(MAX_TITLE_LEN);
+
+  if (!fits(lines)) {
+    // Location links are kept as-is (they're required, not negotiable) —
+    // shrink every title by an equal cut of whatever's left after the fixed
+    // parts (index, brackets, links). Guaranteed to fit at up to 10 items per
+    // list, since that fixed overhead alone leaves comfortably more than a
+    // nub of room per title even with every location link present.
+    const overheadTotal = entries.reduce((sum, e, i) => {
+      const bare = buildLine(e.idx, e.title, e.ghUrl, locationUrls[i], MAX_TITLE_LEN);
+      return sum + (bare.length - Math.min(e.title.length, MAX_TITLE_LEN));
+    }, 0) + (entries.length - 1);
+    const titleBudget = Math.max(Math.floor((FIELD_VALUE_LIMIT - overheadTotal) / entries.length), 1);
+    lines = render(titleBudget);
+  }
+
+  return lines.join('\n');
+}
+
 async function buildFollowLists(
   client: import('discord.js').Client | undefined,
   topics: TopicEntry[],
   boards: BoardEntry[],
-  user?: import('discord.js').User
+  user?: import('discord.js').User,
+  here?: string
 ): Promise<{ topicsStr: string; boardsStr: string }> {
   // A DM follow is keyed by the follower's user id, and /following only ever
   // lists the caller's own doc — so an address equal to the caller means "my
@@ -127,32 +181,22 @@ async function buildFollowLists(
     return url;
   };
 
-  let topicsStr = 'None';
-  let boardsStr = 'None';
+  const topicEntries = topics.map((t, i) => ({
+    idx: i + 1,
+    title: t.topic,
+    ghUrl: `https://geekhack.org/index.php?topic=${t.topic_id}.0`,
+    address: t.address,
+  }));
+  const boardStartIdx = topics.length + 1;
+  const boardEntries = boards.map((b, i) => ({
+    idx: boardStartIdx + i,
+    title: b.board,
+    ghUrl: `https://geekhack.org/index.php?board=${b.board_id}.0`,
+    address: b.address,
+  }));
 
-  if (topics.length > 0) {
-    const lines = await Promise.all(topics.map(async (t, i) => {
-      const idx = i + 1;
-      const url = await getLocationUrl(t.address);
-      const ghUrl = `https://geekhack.org/index.php?topic=${t.topic_id}.0`;
-      return url
-        ? `[[ ${idx} ]](${url}) [${t.topic}](${ghUrl})`
-        : `[ ${idx} ] [${t.topic}](${ghUrl})`;
-    }));
-    topicsStr = lines.join('\n');
-  }
-  if (boards.length > 0) {
-    const startIdx = topics.length + 1;
-    const lines = await Promise.all(boards.map(async (b, i) => {
-      const idx = startIdx + i;
-      const url = await getLocationUrl(b.address);
-      const ghUrl = `https://geekhack.org/index.php?board=${b.board_id}.0`;
-      return url
-        ? `[[ ${idx} ]](${url}) [${b.board}](${ghUrl})`
-        : `[ ${idx} ] [${b.board}](${ghUrl})`;
-    }));
-    boardsStr = lines.join('\n');
-  }
+  const topicsStr = await buildListField(topicEntries, getLocationUrl, here);
+  const boardsStr = await buildListField(boardEntries, getLocationUrl, here);
 
   return { topicsStr, boardsStr };
 }
@@ -326,7 +370,8 @@ async function handleUnfollowOrUnwatchSlash(
 
   if (index === 'all') {
     const doc = await follows(user_id);
-    const { topicsStr, boardsStr } = await buildFollowLists(interaction.client, doc.following.topics, doc.following.boards, interaction.user);
+    const here = interaction.guildId ? interaction.channelId : interaction.user.id;
+    const { topicsStr, boardsStr } = await buildFollowLists(interaction.client, doc.following.topics, doc.following.boards, interaction.user, here);
     await interaction.reply({ embeds: [followListEmbed(topicsStr, boardsStr, avatar)], ephemeral: true });
   } else {
     const r = response as [string, number];
@@ -340,7 +385,8 @@ async function handleFollowingSlash(
   interaction: ChatInputCommandInteraction
 ): Promise<void> {
   const doc = await follows(user_id);
-  const { topicsStr, boardsStr } = await buildFollowLists(interaction.client, doc.following.topics, doc.following.boards, interaction.user);
+  const here = interaction.guildId ? interaction.channelId : interaction.user.id;
+  const { topicsStr, boardsStr } = await buildFollowLists(interaction.client, doc.following.topics, doc.following.boards, interaction.user, here);
   await interaction.reply({ embeds: [followListEmbed(topicsStr, boardsStr, avatar)], ephemeral: true });
 }
 

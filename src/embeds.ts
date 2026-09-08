@@ -119,6 +119,26 @@ export function removedEmbed(
   return embed;
 }
 
+// Discord embed field values are capped at 1024 characters. buildListField
+// (gw.ts) already keeps topics/boards under that, but this is a last-resort
+// backstop for any other caller — truncate on line boundaries, never mid-line
+// (a raw character slice used to cut a line off mid-URL and render garbage).
+const FIELD_VALUE_LIMIT = 1024;
+function truncateField(value: string): string {
+  if (value.length <= FIELD_VALUE_LIMIT) return value;
+  const lines = value.split('\n');
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    const sep = kept.length > 0 ? 1 : 0;
+    if (used + sep + line.length > FIELD_VALUE_LIMIT - 20) break;
+    kept.push(line);
+    used += sep + line.length;
+  }
+  if (kept.length < lines.length) kept.push(`*+${lines.length - kept.length} more*`);
+  return kept.join('\n');
+}
+
 export function watchlistEmbed(topics: string, boards: string, avatar: string): EmbedBuilder {
   const embed = new EmbedBuilder()
     .setColor(BLURPLE)
@@ -128,8 +148,8 @@ export function watchlistEmbed(topics: string, boards: string, avatar: string): 
   const noTopics = !topics || topics === 'None';
   const noBoards = !boards || boards === 'None';
 
-  embed.addFields({ name: '__Topics__', value: topics || 'None', inline: true });
-  embed.addFields({ name: '__Boards__', value: boards || 'None', inline: true });
+  embed.addFields({ name: '__Topics__', value: truncateField(topics || 'None'), inline: true });
+  embed.addFields({ name: '__Boards__', value: truncateField(boards || 'None'), inline: true });
 
   if (noTopics && noBoards) {
     embed
