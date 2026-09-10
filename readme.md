@@ -1,3 +1,8 @@
+## Discord Bot
+
+[**Invite the bot to your server**](https://discord.com/oauth2/authorize?client_id=772690211792224256)
+
+
 ## Introduction
 geekwatch looks to help keyboard enthusiasts and amateurs alike stay up to date with the many posts found within [geekhack](https://geekhack.org/), the standard online forum and home to many clickity-clackity hobbyists.
 
