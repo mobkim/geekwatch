@@ -25,5 +25,4 @@ export const DEFAULT_IMAGE =
 
 export const FOOTER_ICON = 'https://i.imgur.com/JEDbZSQ.png';
 
-export const INVITE_URL =
-  'https://discord.com/oauth2/authorize?client_id=772690211792224256&permissions=10240&scope=bot%20applications.commands';
+export const INVITE_URL = 'https://discord.com/oauth2/authorize?client_id=772690211792224256';
