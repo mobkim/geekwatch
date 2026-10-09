@@ -182,11 +182,15 @@ export async function processTopic(
         try {
           const channel = client.channels.cache.get(address);
           if (!channel || !(channel instanceof TextChannel)) {
+            log(`Topic ${topic_id}: channel ${address} not found in cache, cleaning`);
             clean('channel', address);
             continue;
           }
-          await channel.send({ embeds: [embed] }).catch(() => {});
-        } catch {
+          await channel.send({ embeds: [embed] }).catch(err => {
+            log(`Topic ${topic_id}: failed to send to channel ${address}: ${err}`);
+          });
+        } catch (err) {
+          log(`Topic ${topic_id}: failed to send to channel ${address}: ${err}`);
           clean('channel', address);
         }
       }
@@ -196,10 +200,12 @@ export async function processTopic(
       for (const address of matchedDoc.to.dm.map(String)) {
         try {
           const user = await client.users.fetch(address);
-          await user.send({ embeds: [embed] }).catch(() => {
+          await user.send({ embeds: [embed] }).catch(err => {
+            log(`Topic ${topic_id}: failed to DM ${address}: ${err}`);
             clean('dm', address);
           });
-        } catch {
+        } catch (err) {
+          log(`Topic ${topic_id}: failed to fetch user ${address}: ${err}`);
           clean('dm', address);
         }
       }

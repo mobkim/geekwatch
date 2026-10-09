@@ -110,11 +110,15 @@ export async function processBoard(client: Client, board: Awaited<ReturnType<typ
           try {
             const channel = client.channels.cache.get(address);
             if (!channel || !(channel instanceof TextChannel)) {
+              log(`Board ${boardId}: channel ${address} not found in cache, cleaning`);
               clean('channel', address);
               continue;
             }
-            await channel.send({ embeds: [embed] }).catch(() => {});
-          } catch {
+            await channel.send({ embeds: [embed] }).catch(err => {
+              log(`Board ${boardId}: failed to send to channel ${address}: ${err}`);
+            });
+          } catch (err) {
+            log(`Board ${boardId}: failed to send to channel ${address}: ${err}`);
             clean('channel', address);
           }
         }
@@ -124,10 +128,12 @@ export async function processBoard(client: Client, board: Awaited<ReturnType<typ
         for (const address of board.to.dm.map(String)) {
           try {
             const user = await client.users.fetch(address);
-            await user.send({ embeds: [embed] }).catch(() => {
+            await user.send({ embeds: [embed] }).catch(err => {
+              log(`Board ${boardId}: failed to DM ${address}: ${err}`);
               clean('dm', address);
             });
-          } catch {
+          } catch (err) {
+            log(`Board ${boardId}: failed to fetch user ${address}: ${err}`);
             clean('dm', address);
           }
         }
