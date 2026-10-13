@@ -273,6 +273,17 @@ export function inviteEmbed(): EmbedBuilder {
     .setColor(0x2ecc71);
 }
 
+export function missingPermissionsEmbed(missing: string[]): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle("Missing required permissions in channel")
+    .setDescription(
+      `**${missing.join(', ')}** is required, otherwise updates for anything you follow in this channel won't be delivered.\n\n` +
+      'Ask a server admin to grant me those permissions in this channel, or ' +
+      `[reinvite me](${INVITE_URL}) with the correct permissions.`
+    )
+    .setColor(RED);
+}
+
 export function topicPostEmbed(
   kind: string,
   msg_href: string,

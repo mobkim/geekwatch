@@ -14,6 +14,7 @@ import {
   followListEmbed,
   inviteEmbed,
   confirmRow,
+  missingPermissionsEmbed,
 } from '../embeds.js';
 import {
   follow,
@@ -28,6 +29,15 @@ import { Address, TopicEntry, BoardEntry } from '../types/index.js';
 
 export const unrestrictStates = new Map<string, { guildId: string; address: string; user_id: string }>();
 export const detachStates = new Map<string, { method: 'channel' | 'dm'; address: string; user_id: string }>();
+
+// Permissions the bot needs in a channel to actually deliver follow/watch
+// updates there — matches the Default Install Settings permissions requested
+// by INVITE_URL.
+const REQUIRED_CHANNEL_PERMISSIONS: { flag: bigint; label: string }[] = [
+  { flag: PermissionsBitField.Flags.ViewChannel, label: 'View Channel' },
+  { flag: PermissionsBitField.Flags.SendMessages, label: 'Send Messages' },
+  { flag: PermissionsBitField.Flags.EmbedLinks, label: 'Embed Links' },
+];
 
 export const commands = [
   new SlashCommandBuilder()
@@ -273,6 +283,16 @@ export async function handleSlashCommand(
       case 'invite':
         await interaction.reply({ embeds: [inviteEmbed()], ephemeral: true });
         break;
+    }
+
+    // Warn the caller if updates sent to this channel won't actually land —
+    // appPermissions comes straight off the interaction payload, so this is
+    // accurate even when the bot itself lacks Send Messages here.
+    if (interaction.guildId && interaction.appPermissions && (interaction.replied || interaction.deferred)) {
+      const missing = REQUIRED_CHANNEL_PERMISSIONS.filter(p => !interaction.appPermissions!.has(p.flag)).map(p => p.label);
+      if (missing.length > 0) {
+        await interaction.followUp({ embeds: [missingPermissionsEmbed(missing)], ephemeral: true }).catch(() => {});
+      }
     }
   } catch (err: any) {
     log(`Error handling slash command: ${err.message}`);
